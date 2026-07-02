@@ -9,6 +9,8 @@ import { RedisStore } from 'connect-redis';
 import Redis from 'ioredis';
 
 import { AppModule } from './app.module';
+import * as OpenApiValidator from 'express-openapi-validator';
+import { join } from 'path';
 import './tracing/opentelemetry';
 
 import { CorrelationIdMiddleware } from './middleware/correlation-id';
@@ -33,6 +35,7 @@ import { requestIdMiddleware } from './logging/request-id.middleware';
 
 // GLOBAL ENFORCEMENT IMPORT (IMPORTANT FOR YOUR TASK)
 import { LocaleInterceptor } from './common/interceptors/locale.interceptor';
+import { PaginationInterceptor } from './common/interceptors/pagination.interceptor';
 
 const API_VERSION_HEADER = 'X-API-Version';
 const DEFAULT_API_VERSION = '1';
@@ -308,7 +311,46 @@ async function bootstrapWorker(): Promise<void> {
   // =========================
   // GLOBAL TIMEZONE + LOCALE ENFORCEMENT (IMPORTANT FIX)
   // =========================
-  app.useGlobalInterceptors(new LocaleInterceptor());
+  app.useGlobalInterceptors(new LocaleInterceptor(), new PaginationInterceptor());
+
+  // =========================
+  // OPENAPI VALIDATION
+  // =========================
+  const apiSpecPath = join(process.cwd(), 'docs/api/openapi-spec.json');
+  app.use(
+    OpenApiValidator.middleware({
+      apiSpec: apiSpecPath,
+      validateRequests: true,
+      validateResponses: process.env.NODE_ENV !== 'production',
+      ignorePaths: /.*\/api\/docs.*/, // ignore swagger docs
+    }),
+  );
+
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    if (err.status === 400 && err.errors) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: err.errors.map((e: any) => ({
+          field: e.path,
+          message: e.message,
+        })),
+      });
+    }
+    if (
+      err.status === 500 &&
+      err.errors &&
+      typeof err.message === 'string' &&
+      err.message.toLowerCase().includes('response')
+    ) {
+      logger.warn(`Response validation deviation: ${JSON.stringify(err.errors)}`);
+      return res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+      });
+    }
+    next(err);
+  });
 
   // =========================
   // SWAGGER
