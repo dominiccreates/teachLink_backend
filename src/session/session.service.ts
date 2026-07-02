@@ -227,7 +227,6 @@ await this.addSessionToUserIndex(userId, sid);
   async getUserSessionIds(userId: string): Promise<string[]> {
     return this.redis.zrange(`user:sessions:${userId}`, 0, -1);
   }
-  }
 
   /**
    * Executes migrate Session.
